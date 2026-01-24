@@ -41,6 +41,7 @@ TEMPLATE = """
 {{- $droidian_version := or .droidian_version "%(version)s" -}}
 {{- $droidian_variant := or .droidian_variant "%(droidian_variant)s" -}}
 {{- $droidian_vg_name := or .droidian_vg_name "%(droidian_vg_name)s" -}}
+{{- $device_apt_pkgs := or .device_apt_pkgs "%(device_apt_pkgs)s" -}}
 
 architecture: {{ $architecture }}
 actions:
@@ -80,6 +81,8 @@ TEMPLATE_ENTRYPOINT = """
       droidian_version: {{ $droidian_version }}
       droidian_variant: {{ $droidian_variant }}
       droidian_vg_name: {{ $droidian_vg_name }}
+      device_apt_pkgs: {{ $device_apt_pkgs }}
+      product: {{ $product }}
 """
 
 TEMPLATE_BUNDLE = """
@@ -160,6 +163,7 @@ def generate_recipe_for_product(contents, product, arch, edition, variant, apile
 		"output_type" : config["type"],
 		"use_internal_repository" : "yes" if config.get("use_internal_repository", False) else "no",
         "droidian_vg_name" : config.get("droidian_vg_name", ""),
+        "device_apt_pkgs" : config.get("device_apt_pkgs", ""),
 	}
 
 	# TODO: perhaps use pyyaml?
