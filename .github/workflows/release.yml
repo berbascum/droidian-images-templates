@@ -104,10 +104,18 @@ jobs:
           fi
           # Determine the valid version to use
           if [[ -n "$TAG_NAME" ]]; then
-            # Split tag to release/version
-            # Get version after last '/' separator
+            # Split tag to release/version_variant
+            # Get release before last '/' separator
             TAG_RELEASE="${TAG_NAME%%/*}"  # Reserved for future use (e.g., "droidian")
-            TAG_VERSION="${TAG_NAME#*/}"
+            # Get TAG_VERSION_FULL before last '/' separator
+            TAG_VERSION_FULL="${TAG_NAME#*/}"
+            if [[ "$TAG_VERSION_FULL" == *_* ]]; then
+              TAG_VERSION="${TAG_VERSION_FULL%%_*}"
+              TAG_VERSION_VARIANT="${TAG_VERSION_FULL#*_}" # Reserved for future use
+            else
+              TAG_VERSION="${TAG_VERSION_FULL}"
+              TAG_VERSION_VARIANT="" # Reserved for future use
+            fi
 
             # Validate and set the version
             if [[ "$TAG_VERSION" =~ ^(current|next)$ ]]; then
@@ -144,7 +152,9 @@ jobs:
           echo "FULL_TAG_REF detected: ${FULL_TAG_REF}"
           echo "TAG_NAME detected: ${TAG_NAME}"
           echo "TAG_RELEASE detected: ${TAG_RELEASE}"
+          echo "TAG_VERSION_FULL detected: ${TAG_VERSION_FULL}"
           echo "VALID VERSION detected: ${VALID_VERSION}"
+          echo "TAG_VERSION_VARIANT detected: ${TAG_VERSION_VARIANT}"
 
       - name: Generate matrix
         id: gen-matrix
