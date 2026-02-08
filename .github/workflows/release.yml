@@ -18,12 +18,15 @@ jobs:
       matrix: ${{ steps.gen-matrix.outputs.matrix }}
       rootfs_t_url: ${{ steps.configure-submodules.outputs.rootfs_t_url }}
       device_t_url: ${{ steps.configure-submodules.outputs.device_t_url }}
+      droidian_version: ${{ steps.detect_droidian_version.outputs.version }}
+      is_nightly: ${{ steps.detect_release_type.outputs.is_nightly }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: false
+          fetch-tags: ${{ github.ref_type != 'tag' }} # avoids conflict on tag push
 
       - name: Configure submodules
         id: configure-submodules
@@ -76,6 +79,73 @@ jobs:
             cp -v device-templates/community_devices.yml .
           fi
 
+      - name: Detect release type
+        id: detect_release_type
+        run: |
+          # Release type: nightly only on scheduled
+          if [[ "${{github.event_name}}" == "schedule" ]]; then
+            echo "is_nightly=true" >> $GITHUB_OUTPUT
+            echo "Release type: Nightly"
+          else
+            echo "is_nightly=false" >> $GITHUB_OUTPUT
+            echo "Release type: Release (Draft)"
+          fi
+
+      - name: Detect Droidian version
+        id: detect_droidian_version
+        run: |
+          # Check if triggered by tag push
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            FULL_TAG_REF="${{ github.ref }}"
+            TAG_NAME="${FULL_TAG_REF#refs/tags/}"
+          else
+            # No tag push, check if HEAD has a tag
+            TAG_NAME=$(git tag --points-at HEAD | head -n 1)
+          fi
+          # Determine the valid version to use
+          if [[ -n "$TAG_NAME" ]]; then
+            # Split tag to release/version
+            # Get version after last '/' separator
+            TAG_RELEASE="${TAG_NAME%%/*}"  # Reserved for future use (e.g., "droidian")
+            TAG_VERSION="${TAG_NAME#*/}"
+
+            # Validate and set the version
+            if [[ "$TAG_VERSION" =~ ^(current|next)$ ]]; then
+              VALID_VERSION="$TAG_VERSION"
+            # int versions from snap 99 are allowed
+            elif [[ -n "${TAG_VERSION}" ]] && [ "${TAG_VERSION}" -eq "${TAG_VERSION}" ] 2>/dev/null; then
+              echo "TAG_VERSION It's an integer"
+              if [ "$TAG_VERSION" -ge 99 ]; then
+                VALID_VERSION="$TAG_VERSION"
+              else
+                # No valid int version, fallback to next
+                echo "Fallback to next: Invalid numeric version in tag"
+                VALID_VERSION="next"
+                echo "Invalid version \"${TAG_VERSION}\""
+              fi
+            else
+              # No valid version, fallback to next
+              echo "Fallback to next: No valid version found in tag"
+              VALID_VERSION="next"
+            fi
+          elif [[ "${{github.event_name}}" == "schedule" ]]; then
+
+            echo "Use next: Scheduled trigger"
+            VALID_VERSION="next"
+          else
+            # Fallback to next
+            echo "Fallback to next: No tag detected"
+            VALID_VERSION="next"
+          fi
+
+          # Export version to github env
+          echo "version=${VALID_VERSION}" >> $GITHUB_OUTPUT
+          # Debug outputs
+          echo "FULL_TAG_REF detected: ${FULL_TAG_REF}"
+          echo "TAG_NAME detected: ${TAG_NAME}"
+          echo "TAG_RELEASE detected: ${TAG_RELEASE}"
+          echo "VALID VERSION detected: ${VALID_VERSION}"
+
       - name: Generate matrix
         id: gen-matrix
         run: |
@@ -100,13 +170,13 @@ jobs:
       - name: Set suffix
         run: echo "release_suffix=_${{ env.current_date }}" >> $GITHUB_ENV
 
-      - name: Set nightly version
-        if: startsWith(github.ref, 'refs/tags/droidian') != true
-        run: echo "DROIDIAN_VERSION=next" >> $GITHUB_ENV
+      - name: Set Nightly version
+        if: needs.once.outputs.is_nightly == 'true'
+        run: echo "DROIDIAN_VERSION=${{ needs.once.outputs.droidian_version }}" >> $GITHUB_ENV
 
-      - name: Set version
-        if: startsWith(github.ref, 'refs/tags/droidian') == true
-        run: echo "DROIDIAN_VERSION=$(echo ${{ github.ref }} | rev | cut -d'/' -f1 | rev)" >> $GITHUB_ENV
+      - name: Set Release version
+        if: needs.once.outputs.is_nightly == 'false'
+        run: echo "DROIDIAN_VERSION=${{ needs.once.outputs.droidian_version }}" >> $GITHUB_ENV
 
       - name: Set identifier
         run: echo "DROIDIAN_IDENTIFIER=${{ matrix.config.product }}-${{ matrix.config.arch }}-${{ matrix.config.edition }}-${{ matrix.config.variant }}-${{ matrix.config.apilevel }}" >> $GITHUB_ENV
@@ -171,7 +241,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     name: Create GitHub release
-    needs: build
+    needs: [once, build]
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}${{ steps.create_nightly.outputs.upload_url }}
 
@@ -192,7 +262,7 @@ jobs:
       - name: Nightly tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        if: startsWith(github.ref, 'refs/tags/droidian') != true
+        if: needs.once.outputs.is_nightly == 'true'
         run: |
           gh release delete nightly --yes | true
           git push --delete origin refs/tags/nightly || true
@@ -214,7 +284,7 @@ jobs:
 
       - name: Create stable release (drafted)
         id: create_release
-        if: startsWith(github.ref, 'refs/tags/droidian')
+        if: needs.once.outputs.is_nightly == 'false'
         uses: softprops/action-gh-release@v2.2.2
         with:
           files: droidian-out/SHA256SUMS
@@ -224,7 +294,7 @@ jobs:
 
       - name: Create nightly release
         id: create_nightly
-        if: startsWith(github.ref, 'refs/tags/droidian') != true
+        if: needs.once.outputs.is_nightly == 'true'
         uses: softprops/action-gh-release@v2.2.2
         with:
           files: droidian-out/SHA256SUMS
@@ -254,7 +324,7 @@ jobs:
 
       - name: Create stable release (drafted)
         id: create_release
-        if: startsWith(github.ref, 'refs/tags/droidian')
+        if: needs.once.outputs.is_nightly == 'false'
         uses: softprops/action-gh-release@v2.2.2
         with:
           files: droidian-out/*
@@ -264,7 +334,7 @@ jobs:
 
       - name: Create nightly release
         id: create_nightly
-        if: startsWith(github.ref, 'refs/tags/droidian') != true
+        if: needs.once.outputs.is_nightly == 'true'
         uses: softprops/action-gh-release@v2.2.2
         with:
           files: droidian-out/*
