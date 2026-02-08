@@ -12,10 +12,65 @@ jobs:
     name: Generate matrix
     outputs:
       matrix: ${{ steps.gen-matrix.outputs.matrix }}
+      rootfs_t_url: ${{ steps.configure-submodules.outputs.rootfs_t_url }}
+      device_t_url: ${{ steps.configure-submodules.outputs.device_t_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Configure submodules
+        id: configure-submodules
+        run: |
+          # Fallback defaults
+          DEVICE_T_URL="False"
+
+          GH_OWNER="${{ github.repository_owner}}"
+          # Define default url's
+          ROOTFS_T_URL="https://github.com/droidian-releng/rootfs-templates.git"
+          DEVICE_T_URL="https://github.com/droidian-releng/droidian-device-templates.git"
+          # Define forked url's
+          ROOTFS_T_URL_FORK="https://github.com/$GH_OWNER/rootfs-templates.git"
+          DEVICE_T_URL_FORK="https://github.com/$GH_OWNER/droidian-device-templates.git"
+          # Check url's
+          echo "Checking 'rootfs-templates' fork url..."
+          if git ls-remote --exit-code "${ROOTFS_T_URL_FORK}" HEAD &>/dev/null; then
+            echo "Fork detected for 'rootfs-templates'"
+            ROOTFS_T_URL="${ROOTFS_T_URL_FORK}"
+          fi
+          echo "Checking 'drioidian-device-templates' url..."
+          if git ls-remote --exit-code "${DEVICE_T_URL_FORK}" HEAD &>/dev/null; then
+            echo "Fork detected for 'droidian-device-templates'"
+            DEVICE_T_URL="${DEVICE_T_URL_FORK}"
+          elif git ls-remote --exit-code "${DEVICE_T_URL}" HEAD &>/dev/null; then
+            echo "Upstream detected for 'device-templates'"
+            DEVICE_T_URL="${DEVICE_T_URL}"
+          else
+            echo "No repository found for 'device-templates' Disabling..."
+            DEVICE_T_URL="False"
+          fi
+          echo "ROOTFS_T_URL = ${ROOTFS_T_URL}"
+          echo "DEVICE_T_URL = ${DEVICE_T_URL}"
+          # Configure submodule url's
+          git config --file=.gitmodules submodule.rootfs-templates.url ${ROOTFS_T_URL}
+          if [[ "${DEVICE_T_URL}" != "False" ]]; then
+            git submodule add ${DEVICE_T_URL} device-templates
+          fi
+          # Export final submodule urls to gh outputs
+          echo "rootfs_t_url=${ROOTFS_T_URL}" >> $GITHUB_OUTPUT
+          echo "device_t_url=${DEVICE_T_URL}" >> $GITHUB_OUTPUT
+          echo "DEVICE_T_URL=${DEVICE_T_URL}" >> GITHUB_ENV
+
+      - name: Checkout submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          if [[ "${DEVICE_T_URL}" != "False" ]] && [[ -e "device-templates/community_devices.yml" ]]; then
+            # Copy community_devices to parent
+            cp -v device-templates/community_devices.yml .
+          fi
 
       - name: Generate matrix
         id: gen-matrix
@@ -56,10 +111,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: 'true'
-          submodules: 'recursive'
+          submodules: false
+
+      - name: Configure submodules
+        id: configure-submodules
+        run: |
+          ROOTFS_T_URL="${{ needs.once.outputs.rootfs_t_url }}"
+          DEVICE_T_URL="${{ needs.once.outputs.device_t_url }}"
+          echo "ROOTFS_T_URL = ${ROOTFS_T_URL}"
+          echo "DEVICE_T_URL = ${DEVICE_T_URL}"
+          # Configure submodule url's
+          git config --file=.gitmodules submodule.rootfs-templates.url ${ROOTFS_T_URL}
+          if [[ "${DEVICE_T_URL}" != "False" ]]; then
+            git submodule add ${DEVICE_T_URL} device-templates
+          fi
+          # Export device templates url var to github env
+          echo "DEVICE_T_URL=${DEVICE_T_URL}" >> GITHUB_ENV
 
       - name: Checkout submodules
-        run: git submodule update --init --recursive
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --remote
 
       - name: Create build dir
         run: mkdir -p /tmp/buildd-results
@@ -69,6 +141,16 @@ jobs:
 
       - name: Start Container
         run: echo CONTAINER_HASH=$(docker run --detach --privileged --cgroupns=host -v /tmp/buildd-results:/buildd/out -v /dev:/host-dev -v /sys/fs/cgroup:/sys/fs/cgroup -v ${PWD}:/buildd/sources --security-opt seccomp:unconfined quay.io/droidian/rootfs-builder:next-arm64 sleep infinity) >> $GITHUB_ENV
+
+      - name: Configure Container ENV
+        run: |
+          SETENV_SCRIPT="device-templates/setenv-gh-container.sh"
+           if [[ -e "${SETENV_SCRIPT}" ]]; then
+             echo "Script found: ${SETENV_SCRIPT}"
+             docker exec $CONTAINER_HASH /bin/sh -c "cd /buildd/sources && chmod a+x /buildd/sources/${SETENV_SCRIPT} && . ${SETENV_SCRIPT}"
+           else
+             echo "Script not found: ${SETENV_SCRIPT} Skipping..."
+           fi
 
       - name: Build rootfs
         run: |
