@@ -3,6 +3,10 @@ name: droidian rootfs-builder
 on:
   workflow_dispatch:
   push:
+    branches-ignore:
+      - '**'
+    tags:
+      - '**'
   schedule:
     - cron: "59 23 * * *"
 
