@@ -20,6 +20,7 @@ jobs:
       device_t_url: ${{ steps.configure-submodules.outputs.device_t_url }}
       droidian_version: ${{ steps.detect_droidian_version.outputs.version }}
       is_nightly: ${{ steps.detect_release_type.outputs.is_nightly }}
+      release_title: ${{ steps.set-release-title.outputs.release_title }}
 
     steps:
       - name: Checkout
@@ -84,12 +85,15 @@ jobs:
         run: |
           # Release type: nightly only on scheduled
           if [[ "${{github.event_name}}" == "schedule" ]]; then
-            echo "is_nightly=true" >> $GITHUB_OUTPUT
             echo "Release type: Nightly"
+            IS_NIGHTLY="true"
           else
-            echo "is_nightly=false" >> $GITHUB_OUTPUT
             echo "Release type: Release (Draft)"
+            IS_NIGHTLY="false"
           fi
+
+          echo "IS_NIGHTLY=${IS_NIGHTLY}" >> $GITHUB_ENV
+          echo "is_nightly=${IS_NIGHTLY}" >> $GITHUB_OUTPUT
 
       - name: Detect Droidian version
         id: detect_droidian_version
@@ -111,10 +115,12 @@ jobs:
             TAG_VERSION_FULL="${TAG_NAME#*/}"
             if [[ "$TAG_VERSION_FULL" == *_* ]]; then
               TAG_VERSION="${TAG_VERSION_FULL%%_*}"
-              TAG_VERSION_VARIANT="${TAG_VERSION_FULL#*_}" # Reserved for future use
+              TAG_VERSION_VARIANT="${TAG_VERSION_FULL#*_}"
+              # Replace + with spaces for display
+              TAG_VERSION_VARIANT="${TAG_VERSION_VARIANT//+/ }"
             else
               TAG_VERSION="${TAG_VERSION_FULL}"
-              TAG_VERSION_VARIANT="" # Reserved for future use
+              TAG_VERSION_VARIANT=""
             fi
 
             # Validate and set the version
@@ -148,13 +154,34 @@ jobs:
 
           # Export version to github env
           echo "version=${VALID_VERSION}" >> $GITHUB_OUTPUT
+          echo "VALID_VERSION=${VALID_VERSION}" >> $GITHUB_ENV
+          echo "TAG_VERSION_VARIANT=${TAG_VERSION_VARIANT}" >> $GITHUB_ENV
           # Debug outputs
+
           echo "FULL_TAG_REF detected: ${FULL_TAG_REF}"
           echo "TAG_NAME detected: ${TAG_NAME}"
           echo "TAG_RELEASE detected: ${TAG_RELEASE}"
           echo "TAG_VERSION_FULL detected: ${TAG_VERSION_FULL}"
           echo "VALID VERSION detected: ${VALID_VERSION}"
           echo "TAG_VERSION_VARIANT detected: ${TAG_VERSION_VARIANT}"
+
+      - name: Generate gh release title
+        id: set-release-title
+        run: |
+          if [[ "${IS_NIGHTLY}" == "true" ]]; then
+            RELEASE_PREFIX="Nightly"
+          else
+            RELEASE_PREFIX="Droidian"
+          fi
+
+          if [[ -n "${TAG_VERSION_VARIANT}" ]]; then
+            RELEASE_TITLE="${RELEASE_PREFIX} ${VALID_VERSION} (${TAG_VERSION_VARIANT})"
+          else
+            RELEASE_TITLE="${RELEASE_PREFIX} ${VALID_VERSION}"
+          fi
+
+          echo "RELEASE_TITLE defined: ${RELEASE_TITLE}"
+          echo "release_title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
 
       - name: Generate matrix
         id: gen-matrix
@@ -299,6 +326,7 @@ jobs:
         with:
           files: droidian-out/SHA256SUMS
           tag_name: ${{ github.ref }}
+          name: ${{ needs.once.outputs.release_title }}
           draft: true
           prerelease: false
 
@@ -309,6 +337,7 @@ jobs:
         with:
           files: droidian-out/SHA256SUMS
           tag_name: nightly
+          name: ${{ needs.once.outputs.release_title }}
           draft: false
           prerelease: true
 
@@ -339,6 +368,7 @@ jobs:
         with:
           files: droidian-out/*
           tag_name: ${{ github.ref }}
+          name: ${{ needs.once.outputs.release_title }}
           draft: true
           prerelease: false
 
@@ -348,6 +378,7 @@ jobs:
         uses: softprops/action-gh-release@v2.2.2
         with:
           files: droidian-out/*
+          name: ${{ needs.once.outputs.release_title }}
           tag_name: nightly
           draft: false
           prerelease: true
